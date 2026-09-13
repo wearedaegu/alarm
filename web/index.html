@@ -1,0 +1,308 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<title>윈도우 알람 (웹 버전)</title>
+<style>
+  :root {
+    --bg: #f5f5f7;
+    --card: #ffffff;
+    --text: #1d1d1f;
+    --muted: #6e6e73;
+    --border: #d2d2d7;
+    --accent: #0071e3;
+    --danger: #d70015;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #1c1c1e;
+      --card: #2c2c2e;
+      --text: #f5f5f7;
+      --muted: #a1a1a6;
+      --border: #3a3a3c;
+      --accent: #409cff;
+      --danger: #ff453a;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 24px 16px;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, "Malgun Gothic", "맑은 고딕", sans-serif;
+  }
+  .wrap { max-width: 640px; margin: 0 auto; }
+  h1 { font-size: 20px; margin: 0 0 16px; }
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 16px;
+    margin-bottom: 16px;
+  }
+  .add-form { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+  .add-form input[type="time"] {
+    padding: 8px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: transparent;
+    color: var(--text);
+  }
+  .add-form input[type="text"] {
+    flex: 1;
+    min-width: 120px;
+    padding: 8px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: transparent;
+    color: var(--text);
+  }
+  .days { display: flex; gap: 4px; flex-wrap: wrap; }
+  .days label {
+    font-size: 13px;
+    color: var(--muted);
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    cursor: pointer;
+  }
+  button {
+    padding: 8px 14px;
+    border-radius: 8px;
+    border: none;
+    background: var(--accent);
+    color: white;
+    font-size: 14px;
+    cursor: pointer;
+  }
+  button.secondary { background: var(--border); color: var(--text); }
+  button.danger { background: var(--danger); }
+  .alarm-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 4px;
+    border-bottom: 1px solid var(--border);
+    gap: 10px;
+  }
+  .alarm-item:last-child { border-bottom: none; }
+  .alarm-item.off { opacity: 0.45; }
+  .alarm-time { font-size: 22px; font-weight: 600; min-width: 70px; }
+  .alarm-meta { flex: 1; }
+  .alarm-days { font-size: 13px; color: var(--muted); }
+  .alarm-label { font-size: 14px; }
+  .alarm-actions { display: flex; gap: 6px; }
+  .empty { color: var(--muted); text-align: center; padding: 20px 0; }
+  .switch {
+    width: 42px; height: 24px; border-radius: 12px;
+    background: var(--border); position: relative; cursor: pointer; flex-shrink: 0;
+  }
+  .switch.on { background: var(--accent); }
+  .switch::after {
+    content: ""; position: absolute; top: 2px; left: 2px;
+    width: 20px; height: 20px; border-radius: 50%; background: white;
+    transition: left 0.15s;
+  }
+  .switch.on::after { left: 20px; }
+
+  #overlay {
+    position: fixed; inset: 0; background: rgba(0,0,0,0.6);
+    display: none; align-items: center; justify-content: center; z-index: 10;
+  }
+  #overlay.show { display: flex; }
+  #overlay .box {
+    background: var(--card); border-radius: 16px; padding: 32px;
+    text-align: center; min-width: 240px;
+  }
+  #overlay .time { font-size: 36px; font-weight: 700; margin-bottom: 6px; }
+  #overlay .label { color: var(--muted); margin-bottom: 20px; }
+  #overlay button { padding: 10px 24px; font-size: 15px; }
+  .note { font-size: 12px; color: var(--muted); margin-top: 8px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>윈도우 알람 (웹 버전)</h1>
+
+  <div class="card">
+    <form class="add-form" id="add-form">
+      <input type="time" id="time-input" required />
+      <div class="days" id="day-checkboxes"></div>
+      <input type="text" id="label-input" placeholder="이름 (선택)" />
+      <button type="submit">추가</button>
+    </form>
+    <div class="note">요일을 선택하지 않으면 한 번만 울리고 자동으로 꺼집니다. 이 탭을 열어둬야 알람이 동작합니다.</div>
+  </div>
+
+  <div class="card" id="alarm-list"></div>
+</div>
+
+<div id="overlay">
+  <div class="box">
+    <div class="time" id="overlay-time"></div>
+    <div class="label" id="overlay-label"></div>
+    <button id="overlay-stop">끄기</button>
+  </div>
+</div>
+
+<script>
+const DAY_LABELS = ["월", "화", "수", "목", "금", "토", "일"];
+const STORAGE_KEY = "webAlarms";
+
+let alarms = JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]");
+let lastTriggered = {};
+
+function save() {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(alarms));
+}
+
+const dayCheckboxes = document.getElementById("day-checkboxes");
+DAY_LABELS.forEach((label, i) => {
+  const id = "day-" + i;
+  const wrapper = document.createElement("label");
+  wrapper.innerHTML = `<input type="checkbox" id="${id}" value="${i}" />${label}`;
+  dayCheckboxes.appendChild(wrapper);
+});
+
+document.getElementById("add-form").addEventListener("submit", (e) => {
+  e.preventDefault();
+  const time = document.getElementById("time-input").value;
+  if (!time) return;
+  const days = Array.from(dayCheckboxes.querySelectorAll("input:checked")).map(cb => Number(cb.value));
+  const label = document.getElementById("label-input").value.trim();
+
+  alarms.push({ id: String(Date.now()), time, days, label, enabled: true });
+  save();
+  render();
+  e.target.reset();
+});
+
+function toggleAlarm(id) {
+  const alarm = alarms.find(a => a.id === id);
+  if (alarm) alarm.enabled = !alarm.enabled;
+  save();
+  render();
+}
+
+function deleteAlarm(id) {
+  alarms = alarms.filter(a => a.id !== id);
+  save();
+  render();
+}
+
+function render() {
+  const list = document.getElementById("alarm-list");
+  list.innerHTML = "";
+  if (alarms.length === 0) {
+    list.innerHTML = '<div class="empty">등록된 알람이 없습니다.</div>';
+    return;
+  }
+  alarms
+    .slice()
+    .sort((a, b) => a.time.localeCompare(b.time))
+    .forEach(alarm => {
+      const daysText = alarm.days.length ? alarm.days.map(d => DAY_LABELS[d]).join(",") : "한 번만";
+      const item = document.createElement("div");
+      item.className = "alarm-item" + (alarm.enabled ? "" : " off");
+      item.innerHTML = `
+        <div class="alarm-time">${alarm.time}</div>
+        <div class="alarm-meta">
+          <div class="alarm-days">${daysText}</div>
+          ${alarm.label ? `<div class="alarm-label">${escapeHtml(alarm.label)}</div>` : ""}
+        </div>
+        <div class="alarm-actions">
+          <div class="switch ${alarm.enabled ? "on" : ""}" data-id="${alarm.id}"></div>
+          <button class="danger" data-del="${alarm.id}">삭제</button>
+        </div>
+      `;
+      list.appendChild(item);
+    });
+
+  list.querySelectorAll(".switch").forEach(el => {
+    el.addEventListener("click", () => toggleAlarm(el.dataset.id));
+  });
+  list.querySelectorAll("[data-del]").forEach(el => {
+    el.addEventListener("click", () => deleteAlarm(el.dataset.del));
+  });
+}
+
+function escapeHtml(str) {
+  const div = document.createElement("div");
+  div.textContent = str;
+  return div.innerHTML;
+}
+
+// --- 알람 울림 처리 ---
+let audioCtx = null;
+let ringing = false;
+let ringTimeoutId = null;
+
+function beepLoop() {
+  if (!ringing) return;
+  if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  const osc = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+  osc.frequency.value = 1000;
+  osc.connect(gain);
+  gain.connect(audioCtx.destination);
+  osc.start();
+  osc.stop(audioCtx.currentTime + 0.5);
+  ringTimeoutId = setTimeout(beepLoop, 700);
+}
+
+function startRinging() {
+  ringing = true;
+  beepLoop();
+}
+
+function stopRinging() {
+  ringing = false;
+  clearTimeout(ringTimeoutId);
+}
+
+const overlay = document.getElementById("overlay");
+document.getElementById("overlay-stop").addEventListener("click", () => {
+  stopRinging();
+  overlay.classList.remove("show");
+});
+
+function triggerAlarm(alarm) {
+  document.getElementById("overlay-time").textContent = alarm.time;
+  document.getElementById("overlay-label").textContent = alarm.label || "알람 시간입니다";
+  overlay.classList.add("show");
+  startRinging();
+}
+
+function checkAlarms() {
+  const now = new Date();
+  const hh = String(now.getHours()).padStart(2, "0");
+  const mm = String(now.getMinutes()).padStart(2, "0");
+  const currentTime = `${hh}:${mm}`;
+  const currentWeekday = (now.getDay() + 6) % 7; // 월=0 ... 일=6
+  const currentStamp = now.toDateString() + " " + currentTime;
+
+  let changed = false;
+  for (const alarm of alarms) {
+    if (!alarm.enabled || alarm.time !== currentTime) continue;
+    if (alarm.days.length && !alarm.days.includes(currentWeekday)) continue;
+    if (lastTriggered[alarm.id] === currentStamp) continue;
+
+    lastTriggered[alarm.id] = currentStamp;
+    if (!alarm.days.length) {
+      alarm.enabled = false;
+      changed = true;
+    }
+    triggerAlarm(alarm);
+  }
+  if (changed) {
+    save();
+    render();
+  }
+}
+
+render();
+setInterval(checkAlarms, 1000);
+</script>
+</body>
+</html>
